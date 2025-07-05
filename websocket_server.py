@@ -1,34 +1,46 @@
 import asyncio
 import websockets
 import os
+import logging
 
+logging.basicConfig(level=logging.INFO)
+
+PORT = int(os.environ.get("PORT", 8765))
 connected_clients = set()
 
 
-async def handler(websocket, path):
+async def safe_send(client, message):
+    try:
+        await client.send(message)
+    except websockets.exceptions.ConnectionClosed:
+        connected_clients.discard(client)
+    except Exception as e:
+        logging.warning(f"Error sending to client: {e}")
+
+
+async def handler(websocket):
+    logging.info(f"New client connected: {websocket.remote_address}")
     connected_clients.add(websocket)
-    print(f"Client connected: {websocket.remote_address}")
     try:
         async for message in websocket:
-            print(
+            logging.info(
                 f"Received message from {websocket.remote_address}: {message}")
-            # Broadcast to all connected clients, including sender
-            for client in connected_clients.copy():
-                try:
-                    await client.send(message)
-                except websockets.exceptions.ConnectionClosed:
-                    connected_clients.remove(client)
+            # Broadcast to all connected clients INCLUDING sender
+            await asyncio.gather(
+                *[safe_send(client, message) for client in connected_clients]
+            )
     except websockets.exceptions.ConnectionClosed:
-        print(f"Client disconnected: {websocket.remote_address}")
+        logging.info(f"Client disconnected: {websocket.remote_address}")
+    except Exception as e:
+        logging.error(f"Handler error: {e}")
     finally:
-        connected_clients.remove(websocket)
-        print(f"Client removed: {websocket.remote_address}")
+        connected_clients.discard(websocket)
+        logging.info(f"Client removed: {websocket.remote_address}")
 
 
 async def main():
-    port = int(os.environ.get("PORT", 8765))
-    async with websockets.serve(handler, "0.0.0.0", port):
-        print(f"WebSocket server started on port {port}")
+    async with websockets.serve(handler, "0.0.0.0", PORT):
+        logging.info(f"WebSocket server started on port {PORT}")
         await asyncio.Future()  # run forever
 
 if __name__ == "__main__":
